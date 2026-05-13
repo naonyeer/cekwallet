@@ -7,6 +7,7 @@ import logging
 import os
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from rich.console import Console
@@ -23,14 +24,21 @@ from rich.table import Table
 
 from .chains import CHAINS, Chain, chains_by_ids
 from .dex_pricer import fetch_token_usd_prices
-from .etherscan import ScanClient, make_legacy_client, make_v2_client
+from .etherscan import (
+    ScanClient,
+    make_free_client,
+    make_legacy_client,
+    make_v2_client,
+)
 from .prices import fetch_usd_prices
 from .reporter import write_nfts_csv, write_summary_csv, write_tokens_csv, write_wallet_json
+from .rpc import RpcClient
 from .scanner import (
     ChainResult,
     apply_native_usd,
     apply_token_usd,
     scan_wallet_on_chain,
+    scan_wallet_on_chain_rpc,
 )
 from .wallet_io import load_wallets
 
@@ -105,11 +113,21 @@ def _print_chain_list() -> None:
     table.add_column("Symbol")
     table.add_column("Since", justify="right")
     table.add_column("V2 status")
-    table.add_column("Legacy API key env")
+    table.add_column("Default route")
     for c in CHAINS:
+        if c.v2_status == "v2_free":
+            route = "V2 (free)"
+        elif c.free_api_base:
+            route = f"free: {urlparse(c.free_api_base).netloc}"
+        elif c.rpc_url:
+            route = f"rpc: {urlparse(c.rpc_url).netloc} (native only)"
+        elif c.legacy_api_key_env:
+            route = f"legacy (butuh ${c.legacy_api_key_env})"
+        else:
+            route = "—"
         table.add_row(
             str(c.id), c.name, c.symbol, str(c.launch_year),
-            c.v2_status, c.legacy_api_key_env or "—",
+            c.v2_status, route,
         )
     console.print(table)
 
@@ -119,13 +137,14 @@ def _make_client_for_chain(
     v2_key: str,
     rate_delay: float,
     timeout: float,
-) -> tuple[ScanClient | None, str, str | None]:
+) -> tuple[ScanClient | RpcClient | None, str, str | None]:
     """Return (client, route, skip_reason).
 
-    Route:
-      - "v2"           : pakai V2 unified (free)
-      - "legacy:<env>" : pakai explorer asli
-      - "skipped"      : tidak ada key/route yang tersedia
+    Route priority untuk v2_paid / v1_only chains:
+      1. legacy:ENVKEY  — user punya key (full functionality)
+      2. free:<domain>  — Blockscout / Routescan tanpa key (full functionality)
+      3. rpc:<domain>   — JSON-RPC limited mode (native balance only)
+      4. skipped        — tidak ada route yang tersedia
     """
     if chain.v2_status == "v2_free":
         return (
@@ -134,28 +153,45 @@ def _make_client_for_chain(
             None,
         )
 
-    # v2_paid / v1_only → coba legacy explorer
-    if not chain.legacy_api_base:
-        return None, "skipped", "Tidak ada API base untuk chain ini"
+    # 1. Coba legacy explorer dengan user-provided key
     key_env = chain.legacy_api_key_env
     key = os.environ.get(key_env, "").strip() if key_env else ""
-    if key_env and not key:
-        reason = (
-            f"Butuh ${key_env} di .env (free tier Etherscan V2 belum support chain ini)"
+    if chain.legacy_api_base and key:
+        return (
+            make_legacy_client(
+                api_key=key, base_url=chain.legacy_api_base,
+                rate_delay=rate_delay, timeout=timeout,
+            ),
+            f"legacy:{key_env}",
+            None,
         )
-        if chain.v2_status == "v2_paid":
-            reason = (
-                f"Butuh paid Etherscan V2 atau ${key_env} di .env"
-            )
-        return None, "skipped", reason
-    client = make_legacy_client(
-        api_key=key or "YourApiKeyToken",  # Blockscout explorers accept dummy
-        base_url=chain.legacy_api_base,
-        rate_delay=rate_delay,
-        timeout=timeout,
-    )
-    route = f"legacy:{key_env or 'nokey'}"
-    return client, route, None
+
+    # 2. Coba free Etherscan-compat (Blockscout / Routescan)
+    if chain.free_api_base:
+        return (
+            make_free_client(
+                base_url=chain.free_api_base,
+                rate_delay=rate_delay, timeout=timeout,
+            ),
+            f"free:{urlparse(chain.free_api_base).netloc}",
+            None,
+        )
+
+    # 3. Coba JSON-RPC (limited: native balance only)
+    if chain.rpc_url:
+        return (
+            RpcClient(
+                url=chain.rpc_url, rate_delay=rate_delay, timeout=timeout,
+            ),
+            f"rpc:{urlparse(chain.rpc_url).netloc}",
+            None,
+        )
+
+    # 4. Tidak ada route
+    reason = "Chain tidak punya endpoint gratis yang tersedia"
+    if chain.v2_status == "v2_paid":
+        reason = "Butuh paid Etherscan V2 plan (free tier tidak meng-cover chain ini)"
+    return None, "skipped", reason
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -258,6 +294,9 @@ def main(argv: list[str] | None = None) -> int:
                         status="skipped",
                         skip_reason=skip_reason,
                     )
+                elif isinstance(client, RpcClient):
+                    r = scan_wallet_on_chain_rpc(client, chain, addr)
+                    r.route = route
                 else:
                     r = scan_wallet_on_chain(
                         client,

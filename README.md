@@ -6,8 +6,8 @@ Linea, Scroll, Mantle, Blast, Celo, Moonbeam, Sonic, Berachain, dan lainnya
 (36 chain ter-pre-configured).
 
 Pakai **Etherscan V2 unified API** untuk chain yang didukung free tier, dan
-**fallback ke explorer per-chain** (BSCScan/FtmScan/Snowtrace/dll) untuk chain
-yang butuh paid plan / belum di V2.
+**otomatis fallback ke Blockscout / Routescan / public RPC** (semua gratis, tanpa key)
+untuk chain yang butuh paid plan di V2 atau belum ada di V2.
 
 Untuk tiap kombinasi `wallet × chain`:
 
@@ -53,18 +53,10 @@ Butuh Python 3.10+.
 
 1. Daftar API key Etherscan di https://etherscan.io/myapikey — 1 key dipakai
    untuk semua chain yang ada di tier free V2. Free tier: 5 calls/sec, 100k/hari.
-2. (Opsional) tambah API key per-explorer untuk chain yang **butuh paid plan**
-   atau **belum di V2** — daftar di:
-   - https://bscscan.com/myapikey → `BSCSCAN_API_KEY`
-   - https://basescan.org/myapikey → `BASESCAN_API_KEY`
-   - https://optimistic.etherscan.io/myapikey → `OPTIMISTIC_ETHERSCAN_API_KEY`
-   - https://snowtrace.io/myapikey → `SNOWTRACE_API_KEY`
-   - https://ftmscan.com/myapikey → `FTMSCAN_API_KEY`
-   - https://scrollscan.com/myapikey → `SCROLLSCAN_API_KEY`
-   - dll. Lihat `.env.example` untuk daftar lengkap.
-
-   Chain tanpa key di-skip dengan reason yang jelas — bot tetap jalan.
-
+2. (Opsional, jarang perlu) tambah API key per-explorer untuk chain yang
+   sekarang butuh paid plan di Etherscan V2. Tidak wajib — bot otomatis
+   pakai Blockscout / Routescan / RPC yang gratis. Lihat `.env.example`
+   untuk daftar lengkap kalau kamu memang punya akun paid.
 3. Salin contoh konfigurasi:
 
    ```bash
@@ -107,18 +99,32 @@ Setelah selesai cek `reports/` — buka `summary.csv` di spreadsheet, atau
 
 `cekwallet --list-chains` memunculkan status tiap chain:
 
-- **v2_free** → di-scan langsung via Etherscan V2 dengan `ETHERSCAN_API_KEY`.
+- **v2_free** → di-scan via Etherscan V2 dengan `ETHERSCAN_API_KEY`.
   Mayoritas chain (Ethereum, Polygon, Arbitrum One, Linea, Mantle, Blast,
   Celo, Moonbeam, opBNB, Taiko, XDC, dll).
-- **v2_paid** → ada di V2 tapi butuh paid plan. Bot **fallback** ke explorer
-  asli (BSCScan, BaseScan, Snowtrace, Optimistic Etherscan) kalau key
-  per-explorer di-set. BSC, Base, Optimism, Avalanche.
-- **v1_only** → belum di V2; bot pakai explorer asli kalau key di-set.
-  Fantom, Cronos, Arbitrum Nova, zkSync Era, Polygon zkEVM, Scroll,
-  Soneium, Ink.
+- **v2_paid** (BSC, Base, Optimism, Avalanche) — Etherscan V2 sekarang butuh
+  paid plan. Bot otomatis fallback ke alternatif gratis:
+  - **Base** → `base.blockscout.com` (Blockscout, full data)
+  - **Optimism** → `api.routescan.io/.../10/etherscan` (Routescan, full data)
+  - **Avalanche** → `api.routescan.io/.../43114/etherscan` (Routescan, full data)
+  - **BSC** → `bsc-dataseed.binance.org` (public RPC, **native balance saja**)
+- **v1_only** (belum di V2) — sama, bot otomatis fallback:
+  - **Fantom** → `ftmscout.com` (Blockscout, full data)
+  - **zkSync Era** → `zksync.blockscout.com` (Blockscout, full data)
+  - **Scroll** → `blockscout.scroll.io` (Blockscout, full data)
+  - **Soneium** → `soneium.blockscout.com` (Blockscout, full data)
+  - **Ink** → `explorer.inkonchain.com` (Blockscout, full data)
+  - **Cronos / Arbitrum Nova / Polygon zkEVM** → public RPC (native saja)
 
-Kalau chain butuh key tapi env-nya kosong, chain ditandai
-`status=skipped` dengan reason yang jelas di `summary.csv`.
+Routing priority untuk chain non-`v2_free`:
+  1. Legacy key (`BSCSCAN_API_KEY`/dll) kalau di-set di `.env`
+  2. Free Etherscan-compat (Blockscout / Routescan) kalau ada
+  3. Public RPC (limited: native balance only)
+  4. Skipped
+
+Kolom `route` di `summary.csv` memuat path mana yang dipakai
+(`v2` / `free:<domain>` / `rpc:<domain>` / `legacy:ENVKEY`).
+Chain di mode `rpc:` cuma punya native balance — tx_count, tokens, NFT semuanya 0.
 
 ## Pricing
 

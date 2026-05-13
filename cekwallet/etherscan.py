@@ -44,9 +44,8 @@ class ScanClient:
         timeout: float = 30.0,
         session: requests.Session | None = None,
     ):
-        if not api_key:
-            raise ValueError("API key is required")
-        self.api_key = api_key
+        # api_key boleh kosong untuk Blockscout / Routescan (tidak butuh key)
+        self.api_key = api_key or ""
         self.base_url = base_url
         self.chain_id = chain_id
         self.send_chainid = send_chainid
@@ -68,7 +67,8 @@ class ScanClient:
         q: dict[str, Any] = {**params}
         if self.send_chainid and self.chain_id is not None:
             q["chainid"] = self.chain_id
-        q["apikey"] = self.api_key
+        if self.api_key:
+            q["apikey"] = self.api_key
         last_err: Exception | None = None
         for attempt in range(5):
             self._throttle()
@@ -198,8 +198,27 @@ def make_legacy_client(
     timeout: float = 30.0,
     session: requests.Session | None = None,
 ) -> ScanClient:
+    """Klien Etherscan-style legacy (V1 per-explorer) yang butuh API key."""
     return ScanClient(
         api_key=api_key or "YourApiKeyToken",  # some explorers accept dummy on free
+        base_url=base_url,
+        chain_id=None,
+        send_chainid=False,
+        rate_delay=rate_delay,
+        timeout=timeout,
+        session=session,
+    )
+
+
+def make_free_client(
+    base_url: str,
+    rate_delay: float = 0.22,
+    timeout: float = 30.0,
+    session: requests.Session | None = None,
+) -> ScanClient:
+    """Klien Etherscan-style untuk Blockscout / Routescan / dll yang gratis tanpa key."""
+    return ScanClient(
+        api_key="",
         base_url=base_url,
         chain_id=None,
         send_chainid=False,

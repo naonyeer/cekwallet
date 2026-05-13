@@ -37,6 +37,12 @@ class Chain:
     v2_status: V2Status
     legacy_api_base: str | None = None
     legacy_api_key_env: str | None = None
+    # Etherscan-style API yang tidak butuh key (Blockscout / Routescan / dll).
+    # Dipakai kalau user TIDAK set legacy key. Full functionality (balance + tx + tokens + NFT).
+    free_api_base: str | None = None
+    # Public RPC URL untuk fallback minimal (eth_getBalance saja).
+    # Dipakai kalau free_api_base juga tidak tersedia.
+    rpc_url: str | None = None
     # DexScreener slug untuk pricing ERC-20 (None = tidak didukung DexScreener)
     dex_slug: str | None = None
 
@@ -98,68 +104,70 @@ CHAINS: list[Chain] = [
     Chain(4352, "Memecore", "M", 18, None,
           "https://memecorescan.io", 2025, "v2_free"),
 
-    # === V2 paid tier (perlu paid plan kalau pakai V2; fallback ke explorer legacy) ===
+    # === V2 paid tier (BSC, Base, Optimism, Avalanche) ===
+    # Etherscan V2 free tier tidak meng-cover chain ini. Default routing:
+    # 1. free_api_base (Blockscout / Routescan, gratis tanpa key, full functionality)
+    # 2. rpc_url (kalau free_api_base juga gagal, native balance saja)
+    # Catatan: legacy V1 endpoint (api.bscscan.com, dll) sudah deprecated dan
+    # menolak semua request. Untuk BSC tidak ada free Etherscan-compat alternatif,
+    # jadi fallback ke RPC (cuma native balance).
     Chain(56, "BNB Smart Chain", "BNB", 18, "binancecoin", "https://bscscan.com",
           2020, "v2_paid",
-          legacy_api_base="https://api.bscscan.com/api",
-          legacy_api_key_env="BSCSCAN_API_KEY",
+          rpc_url="https://bsc-dataseed.binance.org/",
           dex_slug="bsc"),
     Chain(10, "Optimism", "ETH", 18, "ethereum", "https://optimistic.etherscan.io",
           2021, "v2_paid",
-          legacy_api_base="https://api-optimistic.etherscan.io/api",
-          legacy_api_key_env="OPTIMISTIC_ETHERSCAN_API_KEY",
+          free_api_base="https://api.routescan.io/v2/network/mainnet/evm/10/etherscan/api",
+          rpc_url="https://mainnet.optimism.io/",
           dex_slug="optimism"),
     Chain(8453, "Base", "ETH", 18, "ethereum", "https://basescan.org",
           2023, "v2_paid",
-          legacy_api_base="https://api.basescan.org/api",
-          legacy_api_key_env="BASESCAN_API_KEY",
+          free_api_base="https://base.blockscout.com/api",
+          rpc_url="https://mainnet.base.org/",
           dex_slug="base"),
     Chain(43114, "Avalanche C-Chain", "AVAX", 18, "avalanche-2",
           "https://snowtrace.io", 2020, "v2_paid",
-          legacy_api_base="https://api.snowtrace.io/api",
-          legacy_api_key_env="SNOWTRACE_API_KEY",
+          free_api_base="https://api.routescan.io/v2/network/mainnet/evm/43114/etherscan/api",
+          rpc_url="https://api.avax.network/ext/bc/C/rpc",
           dex_slug="avalanche"),
 
-    # === Belum/tidak ada di V2 (pakai explorer asli) ===
+    # === Belum/tidak ada di V2 (pakai Blockscout / Routescan / RPC) ===
+    # Blockscout / Routescan = full functionality, no key.
+    # RPC = native balance only (limited mode).
     Chain(250, "Fantom Opera", "FTM", 18, "fantom", "https://ftmscan.com",
           2019, "v1_only",
-          legacy_api_base="https://api.ftmscan.com/api",
-          legacy_api_key_env="FTMSCAN_API_KEY",
+          free_api_base="https://ftmscout.com/api",  # Blockscout, free
+          rpc_url="https://rpc.ftm.tools/",
           dex_slug="fantom"),
     Chain(25, "Cronos", "CRO", 18, "crypto-com-chain", "https://cronoscan.com",
           2021, "v1_only",
-          legacy_api_base="https://api.cronoscan.com/api",
-          legacy_api_key_env="CRONOSCAN_API_KEY",
+          rpc_url="https://evm.cronos.org/",
           dex_slug="cronos"),
     Chain(42170, "Arbitrum Nova", "ETH", 18, "ethereum",
           "https://nova.arbiscan.io", 2022, "v1_only",
-          legacy_api_base="https://api-nova.arbiscan.io/api",
-          legacy_api_key_env="NOVA_ARBISCAN_API_KEY",
+          rpc_url="https://nova.arbitrum.io/rpc",
           dex_slug="arbitrumnova"),
     Chain(324, "zkSync Era", "ETH", 18, "ethereum",
           "https://era.zksync.network", 2023, "v1_only",
-          legacy_api_base="https://api-era.zksync.network/api",
-          legacy_api_key_env="ZKSYNC_ERA_API_KEY",
+          free_api_base="https://zksync.blockscout.com/api",
+          rpc_url="https://mainnet.era.zksync.io/",
           dex_slug="zksync"),
     Chain(1101, "Polygon zkEVM", "ETH", 18, "ethereum",
           "https://zkevm.polygonscan.com", 2023, "v1_only",
-          legacy_api_base="https://api-zkevm.polygonscan.com/api",
-          legacy_api_key_env="ZKEVM_POLYGONSCAN_API_KEY",
+          rpc_url="https://zkevm-rpc.com/",
           dex_slug="polygonzkevm"),
     Chain(534352, "Scroll", "ETH", 18, "ethereum", "https://scrollscan.com",
           2023, "v1_only",
-          legacy_api_base="https://api.scrollscan.com/api",
-          legacy_api_key_env="SCROLLSCAN_API_KEY",
+          free_api_base="https://blockscout.scroll.io/api",
+          rpc_url="https://rpc.scroll.io/",
           dex_slug="scroll"),
     Chain(1868, "Soneium", "ETH", 18, "ethereum",
           "https://soneium.blockscout.com", 2025, "v1_only",
-          legacy_api_base="https://soneium.blockscout.com/api",
-          legacy_api_key_env=None,  # Blockscout: no key required for basic queries
+          free_api_base="https://soneium.blockscout.com/api",
           dex_slug="soneium"),
     Chain(57073, "Ink", "ETH", 18, "ethereum",
           "https://explorer.inkonchain.com", 2024, "v1_only",
-          legacy_api_base="https://explorer.inkonchain.com/api",
-          legacy_api_key_env=None,
+          free_api_base="https://explorer.inkonchain.com/api",
           dex_slug="ink"),
 ]
 

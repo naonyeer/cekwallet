@@ -9,6 +9,7 @@ from decimal import Decimal
 
 from .chains import Chain
 from .etherscan import ScanClient
+from .rpc import RpcClient
 from .scam_filter import is_scam_token
 
 log = logging.getLogger(__name__)
@@ -243,6 +244,34 @@ def scan_wallet_on_chain(
         res.status = "ok"
     except Exception as e:  # noqa: BLE001
         log.exception("scan failed for %s on %s", address, chain.name)
+        res.error = f"{type(e).__name__}: {e}"
+        res.status = "error"
+    return res
+
+
+def scan_wallet_on_chain_rpc(
+    client: RpcClient,
+    chain: Chain,
+    address: str,
+) -> ChainResult:
+    """Limited-mode scan: native balance saja via JSON-RPC.
+
+    Dipakai kalau chain tidak punya Etherscan-compat free API.
+    Tidak ada tx_count, token, NFT — semua field-nya 0/empty.
+    """
+    res = ChainResult(
+        chain_id=chain.id,
+        chain_name=chain.name,
+        address=address,
+        native_symbol=chain.symbol,
+    )
+    try:
+        wei = client.get_balance_wei(address)
+        res.native_raw = wei
+        res.native = f"{_wei_to_decimal(wei, chain.decimals):f}"
+        res.status = "ok"
+    except Exception as e:  # noqa: BLE001
+        log.exception("RPC scan failed for %s on %s", address, chain.name)
         res.error = f"{type(e).__name__}: {e}"
         res.status = "error"
     return res

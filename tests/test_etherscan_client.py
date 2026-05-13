@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from cekwallet.etherscan import make_legacy_client, make_v2_client
+from cekwallet.etherscan import make_free_client, make_legacy_client, make_v2_client
 
 
 class _Resp:
@@ -62,3 +62,16 @@ def test_no_transactions_found_returns_empty():
     )
     c = make_v2_client(api_key="X", chain_id=1, rate_delay=0, session=sess)
     assert c.list_txs("0xabc") == []
+
+
+def test_free_client_no_apikey_param():
+    """Blockscout / Routescan tidak butuh apikey — pastikan tidak dikirim."""
+    sess = _Session([_Resp({"status": "1", "message": "OK", "result": "42"})])
+    c = make_free_client(
+        base_url="https://base.blockscout.com/api", rate_delay=0, session=sess,
+    )
+    assert c.get_balance_wei("0xabc") == 42
+    url, params = sess.calls[0]
+    assert url == "https://base.blockscout.com/api"
+    assert "chainid" not in params
+    assert "apikey" not in params
