@@ -1,0 +1,6 @@
+# Daftar alamat wallet publik yang mau dicek (satu per baris).
+# JANGAN MASUKKAN PRIVATE KEY / SEED PHRASE. Hanya alamat publik 0x...
+# Baris yang diawali '#' diabaikan.
+
+# Contoh (vitalik.eth):
+0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045
