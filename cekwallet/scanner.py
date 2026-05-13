@@ -8,7 +8,8 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from .chains import Chain
-from .etherscan import EtherscanClient
+from .etherscan import ScanClient
+from .scam_filter import is_scam_token
 
 log = logging.getLogger(__name__)
 
@@ -39,6 +40,9 @@ class TokenSummary:
     first_seen: str | None = None
     last_seen: str | None = None
     transfers: int = 0
+    is_scam: bool = False
+    usd_price: float | None = None
+    usd_value: float | None = None
 
 
 @dataclass
@@ -51,6 +55,7 @@ class NftSummary:
     transfers: int = 0
     first_seen: str | None = None
     last_seen: str | None = None
+    is_scam: bool = False
 
 
 @dataclass
@@ -59,6 +64,8 @@ class ChainResult:
     chain_name: str
     address: str
     native_symbol: str
+    route: str = ""  # "v2" | "v1:bscscan" | "skipped"
+    status: str = "ok"  # ok | error | skipped
     native_raw: int = 0
     native: str = "0"
     native_usd: float | None = None
@@ -71,13 +78,16 @@ class ChainResult:
     tokens: list[TokenSummary] = field(default_factory=list)
     nfts: list[NftSummary] = field(default_factory=list)
     nonzero_token_count: int = 0
+    nonzero_real_token_count: int = 0
     nft_holdings_count: int = 0
+    real_nft_holdings_count: int = 0
+    token_usd: float | None = None
     total_usd: float | None = None
     error: str | None = None
+    skip_reason: str | None = None
 
     def to_dict(self) -> dict:
-        d = asdict(self)
-        return d
+        return asdict(self)
 
 
 def _aggregate_token_transfers(
@@ -105,6 +115,7 @@ def _aggregate_token_transfers(
                 decimals=decimals,
                 first_seen=ts,
                 last_seen=ts,
+                is_scam=is_scam_token(sym, name),
             )
             by_contract[contract] = cur
         cur.transfers += 1
@@ -113,7 +124,6 @@ def _aggregate_token_transfers(
                 cur.first_seen = ts
             if not cur.last_seen or ts > cur.last_seen:
                 cur.last_seen = ts
-        # net balance from transfer log (sums in - out)
         try:
             value = int(tx.get("value") or 0)
         except ValueError:
@@ -134,13 +144,16 @@ def _aggregate_nft_transfers(
         contract = tx.get("contractAddress", "").lower()
         if not contract:
             continue
+        sym = tx.get("tokenSymbol") or "?"
+        name = tx.get("tokenName") or "?"
         cur = by_contract.get(contract)
         if cur is None:
             cur = NftSummary(
                 contract=contract,
-                symbol=tx.get("tokenSymbol") or "?",
-                name=tx.get("tokenName") or "?",
+                symbol=sym,
+                name=name,
                 standard=standard,
+                is_scam=is_scam_token(sym, name),
             )
             by_contract[contract] = cur
         ts = _ts_to_iso(tx.get("timeStamp"))
@@ -150,7 +163,6 @@ def _aggregate_nft_transfers(
                 cur.first_seen = ts
             if not cur.last_seen or ts > cur.last_seen:
                 cur.last_seen = ts
-        # net count: ERC-721 = 1 per transfer; ERC-1155 = tokenValue
         if standard == "ERC-1155":
             try:
                 qty = int(tx.get("tokenValue") or tx.get("value") or 1)
@@ -166,7 +178,7 @@ def _aggregate_nft_transfers(
 
 
 def scan_wallet_on_chain(
-    client: EtherscanClient,
+    client: ScanClient,
     chain: Chain,
     address: str,
     include_nft: bool = True,
@@ -181,14 +193,12 @@ def scan_wallet_on_chain(
         native_symbol=chain.symbol,
     )
     try:
-        # native balance
-        wei = client.get_balance_wei(chain.id, address)
+        wei = client.get_balance_wei(address)
         res.native_raw = wei
         res.native = f"{_wei_to_decimal(wei, chain.decimals):f}"
 
-        # tx history
         if include_tx_history:
-            txs = client.list_txs(chain.id, address, max_pages=max_tx_pages)
+            txs = client.list_txs(address, max_pages=max_tx_pages)
             res.tx_count = len(txs)
             res.tx_in = sum(1 for t in txs if t.get("to", "").lower() == address.lower())
             res.tx_out = sum(1 for t in txs if t.get("from", "").lower() == address.lower())
@@ -196,49 +206,78 @@ def scan_wallet_on_chain(
                 res.first_tx_at = _ts_to_iso(txs[0].get("timeStamp"))
                 res.last_tx_at = _ts_to_iso(txs[-1].get("timeStamp"))
             try:
-                itx = client.list_internal_txs(chain.id, address, max_pages=max_tx_pages)
+                itx = client.list_internal_txs(address, max_pages=max_tx_pages)
                 res.internal_tx_count = len(itx)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 log.warning("internal tx fetch failed (%s/%s): %s", chain.name, address, e)
 
-        # erc20
-        erc20 = client.list_erc20_transfers(chain.id, address, max_pages=max_token_pages)
+        erc20 = client.list_erc20_transfers(address, max_pages=max_token_pages)
         tokens = _aggregate_token_transfers(address, erc20)
-        # convert balances
         for t in tokens.values():
             t.balance = f"{_wei_to_decimal(max(t.balance_raw, 0), t.decimals):f}"
-        # urut by transfer count desc
         res.tokens = sorted(tokens.values(), key=lambda x: x.transfers, reverse=True)
         res.nonzero_token_count = sum(1 for t in res.tokens if t.balance_raw > 0)
+        res.nonzero_real_token_count = sum(
+            1 for t in res.tokens if t.balance_raw > 0 and not t.is_scam
+        )
 
-        # nft
         if include_nft:
             nfts: dict[str, NftSummary] = {}
             try:
-                er721 = client.list_erc721_transfers(chain.id, address, max_pages=max_token_pages)
+                er721 = client.list_erc721_transfers(address, max_pages=max_token_pages)
                 nfts.update(_aggregate_nft_transfers(address, er721, "ERC-721"))
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 log.warning("ERC-721 fetch failed (%s/%s): %s", chain.name, address, e)
             try:
-                er1155 = client.list_erc1155_transfers(chain.id, address, max_pages=max_token_pages)
-                # merge: contracts mungkin overlap; pakai key gabungan
+                er1155 = client.list_erc1155_transfers(address, max_pages=max_token_pages)
                 for k, v in _aggregate_nft_transfers(address, er1155, "ERC-1155").items():
                     nfts[f"{k}:1155"] = v
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 log.warning("ERC-1155 fetch failed (%s/%s): %s", chain.name, address, e)
             res.nfts = sorted(nfts.values(), key=lambda x: x.transfers, reverse=True)
             res.nft_holdings_count = sum(max(n.net_count, 0) for n in res.nfts)
+            res.real_nft_holdings_count = sum(
+                max(n.net_count, 0) for n in res.nfts if not n.is_scam
+            )
 
+        res.status = "ok"
     except Exception as e:  # noqa: BLE001
         log.exception("scan failed for %s on %s", address, chain.name)
         res.error = f"{type(e).__name__}: {e}"
+        res.status = "error"
     return res
 
 
-def apply_usd(result: ChainResult, native_usd_price: float | None) -> None:
-    """Hitung native_usd + total_usd dari harga native (token USD belum, butuh price feed terpisah)."""
+def apply_native_usd(result: ChainResult, native_usd_price: float | None) -> None:
     if native_usd_price is None:
         return
     native_dec = Decimal(result.native or "0")
     result.native_usd = float(native_dec * Decimal(str(native_usd_price)))
-    result.total_usd = result.native_usd  # token USD belum dihitung — see README
+
+
+def apply_token_usd(
+    result: ChainResult,
+    prices_by_contract: dict[str, float],
+    include_scam: bool = False,
+) -> None:
+    """Set usd_price + usd_value tiap token, lalu hitung token_usd total dan total_usd."""
+    token_total = 0.0
+    for t in result.tokens:
+        if t.balance_raw <= 0:
+            continue
+        if t.is_scam and not include_scam:
+            continue
+        price = prices_by_contract.get(t.contract.lower())
+        if price is None or price <= 0:
+            continue
+        try:
+            balance_dec = Decimal(t.balance or "0")
+        except Exception:  # noqa: BLE001
+            continue
+        usd_value = float(balance_dec * Decimal(str(price)))
+        t.usd_price = price
+        t.usd_value = usd_value
+        token_total += usd_value
+    result.token_usd = token_total
+    nat = result.native_usd or 0.0
+    result.total_usd = nat + token_total
