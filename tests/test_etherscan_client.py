@@ -1,8 +1,8 @@
-"""Unit test client tanpa hit jaringan — pakai requests-style mock session."""
+"""Unit test client tanpa hit jaringan — pakai mock session."""
 
 from __future__ import annotations
 
-from cekwallet.etherscan import EtherscanClient
+from cekwallet.etherscan import make_legacy_client, make_v2_client
 
 
 class _Resp:
@@ -16,7 +16,7 @@ class _Resp:
 
 
 class _Session:
-    def __init__(self, responses: list[_Resp]):
+    def __init__(self, responses):
         self.responses = list(responses)
         self.calls = []
 
@@ -25,22 +25,34 @@ class _Session:
         return self.responses.pop(0)
 
 
-def test_get_balance_wei():
+def test_v2_get_balance_wei():
     sess = _Session([_Resp({"status": "1", "message": "OK", "result": "12345"})])
-    c = EtherscanClient(api_key="X", rate_delay=0, session=sess)
-    assert c.get_balance_wei(1, "0xabc") == 12345
+    c = make_v2_client(api_key="X", chain_id=1, rate_delay=0, session=sess)
+    assert c.get_balance_wei("0xabc") == 12345
     assert sess.calls[0][1]["chainid"] == 1
     assert sess.calls[0][1]["apikey"] == "X"
     assert sess.calls[0][1]["action"] == "balance"
 
 
+def test_legacy_no_chainid_param():
+    sess = _Session([_Resp({"status": "1", "message": "OK", "result": "99"})])
+    c = make_legacy_client(
+        api_key="K", base_url="https://api.bscscan.com/api",
+        rate_delay=0, session=sess,
+    )
+    assert c.get_balance_wei("0xabc") == 99
+    url, params = sess.calls[0]
+    assert url == "https://api.bscscan.com/api"
+    assert "chainid" not in params
+    assert params["apikey"] == "K"
+
+
 def test_paginate_stops_when_short_page():
     rows = [{"hash": str(i)} for i in range(2)]
     sess = _Session([_Resp({"status": "1", "message": "OK", "result": rows})])
-    c = EtherscanClient(api_key="X", rate_delay=0, session=sess)
-    out = c.list_txs(1, "0xabc", max_pages=3)
+    c = make_v2_client(api_key="X", chain_id=1, rate_delay=0, session=sess)
+    out = c.list_txs("0xabc", max_pages=3)
     assert len(out) == 2
-    # Should only have made 1 call (short page exits loop)
     assert len(sess.calls) == 1
 
 
@@ -48,32 +60,5 @@ def test_no_transactions_found_returns_empty():
     sess = _Session(
         [_Resp({"status": "0", "message": "No transactions found", "result": []})]
     )
-    c = EtherscanClient(api_key="X", rate_delay=0, session=sess)
-    assert c.list_txs(1, "0xabc") == []
-
-
-def test_balancemulti_chunked():
-    addrs = [f"0x{i:040x}" for i in range(25)]
-    sess = _Session(
-        [
-            _Resp(
-                {
-                    "status": "1",
-                    "message": "OK",
-                    "result": [{"account": a, "balance": "1"} for a in addrs[:20]],
-                }
-            ),
-            _Resp(
-                {
-                    "status": "1",
-                    "message": "OK",
-                    "result": [{"account": a, "balance": "2"} for a in addrs[20:]],
-                }
-            ),
-        ]
-    )
-    c = EtherscanClient(api_key="X", rate_delay=0, session=sess)
-    out = c.get_balances_wei(1, addrs)
-    assert len(out) == 25
-    assert out[addrs[0]] == 1
-    assert out[addrs[-1]] == 2
+    c = make_v2_client(api_key="X", chain_id=1, rate_delay=0, session=sess)
+    assert c.list_txs("0xabc") == []
